@@ -16,66 +16,85 @@ const App = () => {
   // Determine if file is large and should use conservative expansion
   const isLargeFile = fileSize > 5 * 1024 * 1024; // 5MB threshold
 
-  // Search functionality
+  // Search functionality - with safety limits to prevent crashes
   const searchInData = (data, query, path = []) => {
-    if (!query.trim()) return [];
+    if (!query.trim() || !data) return [];
     
     const results = [];
     const lowerQuery = query.toLowerCase();
+    const MAX_RESULTS = 1000; // Limit results to prevent performance issues
+    const MAX_DEPTH = 50; // Limit recursion depth
     
-    const search = (obj, currentPath) => {
+    const search = (obj, currentPath, depth = 0) => {
+      if (results.length >= MAX_RESULTS || depth > MAX_DEPTH) return;
       if (obj === null || obj === undefined) return;
       
-      if (typeof obj === 'object') {
-        if (Array.isArray(obj)) {
-          obj.forEach((item, index) => {
-            const newPath = [...currentPath, `[${index}]`];
-            search(item, newPath);
-          });
+      try {
+        if (typeof obj === 'object') {
+          if (Array.isArray(obj)) {
+            obj.slice(0, 1000).forEach((item, index) => { // Limit array items searched
+              if (results.length >= MAX_RESULTS) return;
+              const newPath = [...currentPath, `[${index}]`];
+              search(item, newPath, depth + 1);
+            });
+          } else {
+            Object.entries(obj).slice(0, 1000).forEach(([key, value]) => { // Limit object keys searched
+              if (results.length >= MAX_RESULTS) return;
+              const newPath = [...currentPath, key];
+              
+              // Check if key matches
+              if (key.toLowerCase().includes(lowerQuery)) {
+                results.push({
+                  type: 'key',
+                  path: newPath,
+                  key: key,
+                  value: value,
+                  pathString: newPath.join('.')
+                });
+              }
+              
+              search(value, newPath, depth + 1);
+            });
+          }
         } else {
-          Object.entries(obj).forEach(([key, value]) => {
-            const newPath = [...currentPath, key];
-            
-            // Check if key matches
-            if (key.toLowerCase().includes(lowerQuery)) {
-              results.push({
-                type: 'key',
-                path: newPath,
-                key: key,
-                value: value,
-                pathString: newPath.join('.')
-              });
-            }
-            
-            search(value, newPath);
-          });
+          // Check if value matches
+          const strValue = String(obj).toLowerCase();
+          if (strValue.includes(lowerQuery)) {
+            results.push({
+              type: 'value',
+              path: currentPath,
+              value: obj,
+              pathString: currentPath.join('.')
+            });
+          }
         }
-      } else {
-        // Check if value matches
-        const strValue = String(obj).toLowerCase();
-        if (strValue.includes(lowerQuery)) {
-          results.push({
-            type: 'value',
-            path: currentPath,
-            value: obj,
-            pathString: currentPath.join('.')
-          });
-        }
+      } catch (e) {
+        // Skip this item if it causes errors
+        console.warn('Search error:', e);
       }
     };
     
     search(data, path);
-    return results;
+    return results.slice(0, MAX_RESULTS); // Ensure we never return too many results
   };
 
-  // Update search results when query or data changes
+  // Update search results when query or data changes - with debouncing
   React.useEffect(() => {
-    if (jsonData && searchQuery) {
-      const results = searchInData(jsonData, searchQuery);
-      setSearchResults(results);
-    } else {
-      setSearchResults([]);
-    }
+    const timeoutId = setTimeout(() => {
+      if (jsonData && searchQuery.trim()) {
+        try {
+          const results = searchInData(jsonData, searchQuery);
+          setSearchResults(results);
+        } catch (e) {
+          console.error('Search error:', e);
+          setSearchResults([]);
+        }
+      } else {
+        setSearchResults([]);
+      }
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timeoutId);
   }, [jsonData, searchQuery]);
 
   const processFile = async (file) => {
@@ -269,6 +288,7 @@ const App = () => {
             {searchResults.length > 0 && (
               <div className="mt-2 text-xs text-gray-600">
                 Found {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+                {searchResults.length === 1000 && <span className="text-orange-600"> (limited to first 1000)</span>}
               </div>
             )}
             {searchQuery && searchResults.length === 0 && (
@@ -359,25 +379,42 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile, searchQuery, sear
   
   // Auto-expand nodes that contain search matches
   React.useEffect(() => {
-    if (searchQuery && isSearchMatch) {
-      setIsExpanded(true);
+    try {
+      if (searchQuery && isSearchMatch) {
+        setIsExpanded(true);
+      }
+    } catch (e) {
+      // Silently handle expansion errors
     }
   }, [searchQuery, isSearchMatch]);
   
-  // Highlight matching text
+  // Highlight matching text - simplified to avoid crashes
   const highlightText = (text, shouldHighlight) => {
-    if (!shouldHighlight || !searchQuery) return text;
+    if (!shouldHighlight || !searchQuery || typeof text !== 'string') return text;
     
-    const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    const parts = text.split(regex);
+    const query = searchQuery.toLowerCase();
+    const lowerText = text.toLowerCase();
     
-    return parts.map((part, i) => 
-      regex.test(part) ? (
-        <span key={i} className="bg-yellow-400 text-black px-1 rounded">
-          {part}
-        </span>
-      ) : part
-    );
+    if (!lowerText.includes(query)) return text;
+    
+    try {
+      const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      const parts = text.split(regex);
+      
+      return parts.map((part, i) => {
+        if (part.toLowerCase() === query) {
+          return (
+            <span key={i} className="bg-yellow-400 text-black px-1 rounded">
+              {part}
+            </span>
+          );
+        }
+        return part;
+      });
+    } catch (e) {
+      // Fallback if regex fails
+      return text;
+    }
   };
   
   const copyToClipboard = async (e) => {
@@ -517,23 +554,13 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile, searchQuery, sear
             className="flex-1 min-w-0 break-words"
             style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap', alignSelf: 'flex-start' }}
           >
-{isValueMatch ? (
-              <span>
-                {typeof data === 'string' ? (
-                  <span className="text-yellow-300">
-                    "{highlightText(data.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\"/g, '"').replace(/\\\\/g, '\\'), true)}"
-                  </span>
-                ) : (
-                  <span className={
-                    typeof data === 'number' ? 'text-blue-400' : 
-                    typeof data === 'boolean' ? 'text-orange-400' : 
-                    'text-purple-400'
-                  }>
-                    {highlightText(String(data), true)}
-                  </span>
-                )}
+            {isValueMatch ? (
+              <span className={`${isValueMatch ? 'bg-yellow-400 text-black px-1 rounded' : ''}`}>
+                {renderValue(data)}
               </span>
-            ) : renderValue(data)}
+            ) : (
+              renderValue(data)
+            )}
           </span>
         )}
         
