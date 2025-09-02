@@ -404,7 +404,7 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile, searchQuery, sear
       return parts.map((part, i) => {
         if (part.toLowerCase() === query) {
           return (
-            <span key={i} className="bg-yellow-400 text-black px-1 rounded">
+            <span key={i} className="bg-yellow-300 text-gray-900 px-1 rounded font-medium">
               {part}
             </span>
           );
@@ -555,7 +555,7 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile, searchQuery, sear
             style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap', alignSelf: 'flex-start' }}
           >
             {isValueMatch ? (
-              <span className={`${isValueMatch ? 'bg-yellow-400 text-black px-1 rounded' : ''}`}>
+              <span className="bg-yellow-300 text-gray-900 px-1 rounded font-medium">
                 {renderValue(data)}
               </span>
             ) : (
