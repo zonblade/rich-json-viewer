@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Copy, Check, Upload, Loader } from 'lucide-react';
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Copy, Check, Upload, Loader, Search, X } from 'lucide-react';
 
 const App = () => {
   const [jsonData, setJsonData] = useState(null);
@@ -8,10 +8,75 @@ const App = () => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [fileSize, setFileSize] = useState(0);
+  const [isJsonlFile, setIsJsonlFile] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
   const fileInputRef = React.useRef(null);
 
   // Determine if file is large and should use conservative expansion
   const isLargeFile = fileSize > 5 * 1024 * 1024; // 5MB threshold
+
+  // Search functionality
+  const searchInData = (data, query, path = []) => {
+    if (!query.trim()) return [];
+    
+    const results = [];
+    const lowerQuery = query.toLowerCase();
+    
+    const search = (obj, currentPath) => {
+      if (obj === null || obj === undefined) return;
+      
+      if (typeof obj === 'object') {
+        if (Array.isArray(obj)) {
+          obj.forEach((item, index) => {
+            const newPath = [...currentPath, `[${index}]`];
+            search(item, newPath);
+          });
+        } else {
+          Object.entries(obj).forEach(([key, value]) => {
+            const newPath = [...currentPath, key];
+            
+            // Check if key matches
+            if (key.toLowerCase().includes(lowerQuery)) {
+              results.push({
+                type: 'key',
+                path: newPath,
+                key: key,
+                value: value,
+                pathString: newPath.join('.')
+              });
+            }
+            
+            search(value, newPath);
+          });
+        }
+      } else {
+        // Check if value matches
+        const strValue = String(obj).toLowerCase();
+        if (strValue.includes(lowerQuery)) {
+          results.push({
+            type: 'value',
+            path: currentPath,
+            value: obj,
+            pathString: currentPath.join('.')
+          });
+        }
+      }
+    };
+    
+    search(data, path);
+    return results;
+  };
+
+  // Update search results when query or data changes
+  React.useEffect(() => {
+    if (jsonData && searchQuery) {
+      const results = searchInData(jsonData, searchQuery);
+      setSearchResults(results);
+    } else {
+      setSearchResults([]);
+    }
+  }, [jsonData, searchQuery]);
 
   const processFile = async (file) => {
     if (!file) return;
@@ -20,16 +85,48 @@ const App = () => {
     setFileSize(file.size);
     setError('');
     setIsLoading(true);
+    setIsJsonlFile(file.name.toLowerCase().endsWith('.jsonl'));
 
     // Use setTimeout to allow UI to update with loading state
     setTimeout(() => {
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const parsed = JSON.parse(e.target.result);
-          setJsonData(parsed);
+          const content = e.target.result;
+          const isJsonl = file.name.toLowerCase().endsWith('.jsonl');
+          
+          if (isJsonl) {
+            // Parse JSONL (JSON Lines) format
+            const lines = content.split('\n').filter(line => line.trim() !== '');
+            const parsedLines = [];
+            const errors = [];
+            
+            lines.forEach((line, index) => {
+              try {
+                const parsed = JSON.parse(line.trim());
+                parsedLines.push(parsed);
+              } catch (err) {
+                errors.push(`Line ${index + 1}: ${err.message}`);
+              }
+            });
+            
+            if (errors.length > 0 && parsedLines.length === 0) {
+              setError('Invalid JSONL file. No valid JSON objects found:\n' + errors.slice(0, 5).join('\n') + (errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''));
+              setJsonData(null);
+            } else if (errors.length > 0) {
+              setError(`JSONL file contains ${errors.length} invalid lines (skipped). First few errors:\n` + errors.slice(0, 3).join('\n'));
+              setJsonData(parsedLines);
+            } else {
+              setJsonData(parsedLines);
+            }
+          } else {
+            // Parse regular JSON format
+            const parsed = JSON.parse(content);
+            setJsonData(parsed);
+          }
         } catch (err) {
-          setError('Invalid JSON file: ' + err.message);
+          const fileType = file.name.toLowerCase().endsWith('.jsonl') ? 'JSONL' : 'JSON';
+          setError(`Invalid ${fileType} file: ` + err.message);
           setJsonData(null);
         } finally {
           setIsLoading(false);
@@ -69,10 +166,10 @@ const App = () => {
     if (files.length > 0) {
       const file = files[0];
       
-      if (file.type === 'application/json' || file.name.toLowerCase().endsWith('.json')) {
+      if (file.type === 'application/json' || file.name.toLowerCase().endsWith('.json') || file.name.toLowerCase().endsWith('.jsonl')) {
         processFile(file);
       } else {
-        setError('Please drop a valid JSON file (.json)');
+        setError('Please drop a valid JSON or JSONL file (.json, .jsonl)');
         setJsonData(null);
       }
     }
@@ -99,7 +196,7 @@ const App = () => {
             <div className="flex flex-col items-center gap-4">
               <Upload size={48} className="text-blue-500" />
               <div className="text-center">
-                <h3 className="text-xl font-semibold text-gray-800">Drop JSON file here</h3>
+                <h3 className="text-xl font-semibold text-gray-800">Drop JSON/JSONL file here</h3>
                 <p className="text-gray-600 mt-1">Release to open the file</p>
               </div>
             </div>
@@ -112,7 +209,7 @@ const App = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".json"
+            accept=".json,.jsonl"
             onChange={handleFileLoad}
             className="hidden"
           />
@@ -123,12 +220,12 @@ const App = () => {
           >
             {isLoading ? <Loader size={12} className="animate-spin" /> : <File size={12} />}
             <span className='text-xs'>
-              {isLoading ? 'Loading...' : 'Open JSON File'}
+              {isLoading ? 'Loading...' : 'Open JSON/JSONL File'}
             </span>
           </button>
           
           <span className="ml-4 text-sm text-gray-500">
-            or drag & drop a JSON file anywhere
+            or drag & drop a JSON/JSONL file anywhere
           </span>
           
           {fileName && (
@@ -140,9 +237,47 @@ const App = () => {
                   • Large file: limited auto-expansion for performance
                 </span>
               )}
+              {isJsonlFile && (
+                <span className="ml-2 text-blue-600 text-xs">
+                  • JSONL format: each line parsed as separate JSON object
+                </span>
+              )}
             </p>
           )}
         </div>
+
+        {jsonData && !isLoading && (
+          <div className="mb-4">
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search keys and values..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            {searchResults.length > 0 && (
+              <div className="mt-2 text-xs text-gray-600">
+                Found {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+              </div>
+            )}
+            {searchQuery && searchResults.length === 0 && (
+              <div className="mt-2 text-xs text-gray-500">
+                No matches found
+              </div>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
@@ -154,7 +289,7 @@ const App = () => {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <Loader size={48} className="text-blue-500 mx-auto mb-4 animate-spin" />
-              <h3 className="text-lg font-medium text-gray-600 mb-2">Processing JSON file...</h3>
+              <h3 className="text-lg font-medium text-gray-600 mb-2">Processing file...</h3>
               <p className="text-gray-500">
                 Large files may take a moment to load
               </p>
@@ -166,12 +301,12 @@ const App = () => {
           <div className="flex-1 flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg">
             <div className="text-center">
               <Upload size={48} className="text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-600 mb-2">No JSON file loaded</h3>
+              <h3 className="text-lg font-medium text-gray-600 mb-2">No JSON/JSONL file loaded</h3>
               <p className="text-gray-500">
-                Click "Open JSON File" or drag & drop a JSON file to get started
+                Click "Open JSON/JSONL File" or drag & drop a JSON/JSONL file to get started
               </p>
               <p className="text-xs text-gray-400 mt-2">
-                Optimized for large files (30-100MB+)
+                Supports JSON & JSONL formats • Optimized for large files (30-100MB+)
               </p>
             </div>
           </div>
@@ -182,7 +317,15 @@ const App = () => {
             <div className="mb-2 text-xs text-gray-400">
               💡 Double-click any value to copy • Hover for copy button
             </div>
-            <TreeNode data={jsonData} name="root" level={0} isLargeFile={isLargeFile} />
+            <TreeNode 
+              data={jsonData} 
+              name={isJsonlFile ? "jsonl_records" : "root"} 
+              level={0} 
+              isLargeFile={isLargeFile}
+              searchQuery={searchQuery}
+              searchResults={searchResults}
+              path={[]}
+            />
           </div>
         )}
       </div>
@@ -190,7 +333,7 @@ const App = () => {
   );
 };
 
-const TreeNode = React.memo(({ data, name, level, isLargeFile }) => {
+const TreeNode = React.memo(({ data, name, level, isLargeFile, searchQuery, searchResults, path = [] }) => {
   // Smart auto-expansion: only expand first level for large files, first 2 levels for small files
   const shouldAutoExpand = isLargeFile ? level < 1 : level < 2;
   const [isExpanded, setIsExpanded] = useState(shouldAutoExpand);
@@ -202,7 +345,40 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile }) => {
   const isArray = Array.isArray(data);
   const isPrimitive = !isObject && !isArray;
   
+  // Check if this node or its content matches search
+  const currentPath = [...path, name];
+  const pathString = currentPath.join('.');
+  const isSearchMatch = searchResults.some(result => 
+    result.pathString === pathString || result.pathString.startsWith(pathString + '.')
+  );
+  const isKeyMatch = searchQuery && name.toLowerCase().includes(searchQuery.toLowerCase());
+  const isValueMatch = isPrimitive && searchQuery && 
+    String(data).toLowerCase().includes(searchQuery.toLowerCase());
+  
   const toggleExpanded = () => setIsExpanded(!isExpanded);
+  
+  // Auto-expand nodes that contain search matches
+  React.useEffect(() => {
+    if (searchQuery && isSearchMatch) {
+      setIsExpanded(true);
+    }
+  }, [searchQuery, isSearchMatch]);
+  
+  // Highlight matching text
+  const highlightText = (text, shouldHighlight) => {
+    if (!shouldHighlight || !searchQuery) return text;
+    
+    const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    const parts = text.split(regex);
+    
+    return parts.map((part, i) => 
+      regex.test(part) ? (
+        <span key={i} className="bg-yellow-400 text-black px-1 rounded">
+          {part}
+        </span>
+      ) : part
+    );
+  };
   
   const copyToClipboard = async (e) => {
     e.stopPropagation();
@@ -321,7 +497,7 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile }) => {
             className="text-gray-300 ml-1"
             style={{ minWidth: 100, maxWidth: 220, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', alignSelf: 'flex-start' }}
           >
-            {name}
+            {highlightText(name, isKeyMatch)}
             {isArray && (
               <span className="text-gray-500">
                 [{data.length}]
@@ -341,7 +517,23 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile }) => {
             className="flex-1 min-w-0 break-words"
             style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap', alignSelf: 'flex-start' }}
           >
-            {renderValue(data)}
+{isValueMatch ? (
+              <span>
+                {typeof data === 'string' ? (
+                  <span className="text-yellow-300">
+                    "{highlightText(data.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\"/g, '"').replace(/\\\\/g, '\\'), true)}"
+                  </span>
+                ) : (
+                  <span className={
+                    typeof data === 'number' ? 'text-blue-400' : 
+                    typeof data === 'boolean' ? 'text-orange-400' : 
+                    'text-purple-400'
+                  }>
+                    {highlightText(String(data), true)}
+                  </span>
+                )}
+              </span>
+            ) : renderValue(data)}
           </span>
         )}
         
@@ -370,6 +562,9 @@ const TreeNode = React.memo(({ data, name, level, isLargeFile }) => {
               name={name} 
               level={level + 1}
               isLargeFile={isLargeFile}
+              searchQuery={searchQuery}
+              searchResults={searchResults}
+              path={currentPath}
             />
           ))}
           {isArray && isLargeFile && data.length > visibleCount && (
